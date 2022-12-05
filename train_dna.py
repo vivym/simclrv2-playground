@@ -30,7 +30,7 @@ class ImageNet(pl.LightningDataModule):
 
     def train_dataloader(self):
         dataset = ImageFolder(
-            root="data/imagenet/train",
+            root="data/dna/train",
             transform=self.transform,
         )
 
@@ -44,21 +44,7 @@ class ImageNet(pl.LightningDataModule):
 
     def val_dataloader(self):
         dataset = ImageFolder(
-            root="data/imagenet/val",
-            transform=self.transform,
-        )
-
-        return DataLoader(
-            dataset,
-            batch_size=self.val_batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
-
-    def test_dataloader(self):
-        dataset = ImageFolder(
-            root="images",
+            root="data/dna/val",
             transform=self.transform,
         )
 
@@ -84,8 +70,8 @@ class Model(pl.LightningModule):
         self.max_epochs = max_epochs
 
         pth_path = "r152_3x_sk1.pth"
-        self.resnet, _ = get_resnet(*name_to_params("r152_3x_sk1.pth"))
-        self.resnet.load_state_dict(torch.load(pth_path, map_location="cpu")["resnet"])
+        self.resnet, _ = get_resnet(*name_to_params(pth_path))
+        # self.resnet.load_state_dict(torch.load(pth_path, map_location="cpu")["resnet"])
 
         for param in self.resnet.parameters():
             param.requires_grad = False
@@ -154,19 +140,25 @@ def main():
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=1,
-        precision=16,
-        max_epochs=4,
+        precision=32,
+        max_epochs=30,
     )
+    model = Model(
+        learning_rate=1e-3,
+        max_epochs=30,
+    )
+    model.load_state_dict(torch.load(
+        "lightning_logs/version_4/checkpoints/epoch=3-step=20020.ckpt",
+        map_location="cpu",
+    )["state_dict"])
+    model.fc = nn.Linear(2048, 20)
     trainer.fit(
         datamodule=ImageNet(
             train_batch_size=256,
             val_batch_size=256,
             num_workers=16,
         ),
-        model=Model(
-            learning_rate=1e-3,
-            max_epochs=3,
-        ),
+        model=model,
     )
 
 

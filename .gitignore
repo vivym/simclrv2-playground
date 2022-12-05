@@ -1,6 +1,11 @@
+/data
 /val
 /r152_3x_sk1
+/features
+/images
+/lightning_logs/
 *.pth
+*.zip
 
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,python

@@ -1,74 +1,17 @@
+from pathlib import Path
+
+import numpy as np
 import torch
+import pytorch_lightning as pl
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch_lightning as pl
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import ImageFolder
+from tqdm import tqdm
+from PIL import Image
 
 from resnet import get_resnet, name_to_params
-
-
-class ImageNet(pl.LightningDataModule):
-    def __init__(
-        self,
-        train_batch_size: int = 128,
-        val_batch_size: int = 128,
-        num_workers: int = 16,
-    ):
-        super().__init__()
-
-        self.train_batch_size = train_batch_size
-        self.val_batch_size = val_batch_size
-        self.num_workers = num_workers
-
-        self.transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-        ])
-
-    def train_dataloader(self):
-        dataset = ImageFolder(
-            root="data/imagenet/train",
-            transform=self.transform,
-        )
-
-        return DataLoader(
-            dataset,
-            batch_size=self.train_batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
-
-    def val_dataloader(self):
-        dataset = ImageFolder(
-            root="data/imagenet/val",
-            transform=self.transform,
-        )
-
-        return DataLoader(
-            dataset,
-            batch_size=self.val_batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
-
-    def test_dataloader(self):
-        dataset = ImageFolder(
-            root="images",
-            transform=self.transform,
-        )
-
-        return DataLoader(
-            dataset,
-            batch_size=self.val_batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
 
 
 class Model(pl.LightningModule):
@@ -84,14 +27,14 @@ class Model(pl.LightningModule):
         self.max_epochs = max_epochs
 
         pth_path = "r152_3x_sk1.pth"
-        self.resnet, _ = get_resnet(*name_to_params("r152_3x_sk1.pth"))
-        self.resnet.load_state_dict(torch.load(pth_path, map_location="cpu")["resnet"])
+        self.resnet, _ = get_resnet(*name_to_params(pth_path))
+        # self.resnet.load_state_dict(torch.load(pth_path, map_location="cpu")["resnet"])
 
         for param in self.resnet.parameters():
             param.requires_grad = False
 
         self.reduce = nn.Linear(6144, 2048)
-        self.fc = nn.Linear(2048, 1000)
+        self.fc = nn.Linear(2048, 20)
 
     def forward(self, x):
         with torch.no_grad():
@@ -150,24 +93,57 @@ class Model(pl.LightningModule):
         }
 
 
+class MyDataset(Dataset):
+    def __init__(
+        self,
+        transform,
+    ):
+        super().__init__()
+
+        self.transform = transform
+        self.paths = list(Path("images/1").glob("*.jpeg"))
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, index: int):
+        path = self.paths[index]
+        image = Image.open(path).convert("RGB")
+        image = self.transform(image)
+        return image, path.name
+
+
 def main():
-    trainer = pl.Trainer(
-        accelerator="gpu",
-        devices=1,
-        precision=16,
-        max_epochs=4,
+    transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+    ])
+
+    dataloader = DataLoader(
+        MyDataset(transform),
+        batch_size=256,
+        shuffle=False,
+        num_workers=16,
+        pin_memory=True,
     )
-    trainer.fit(
-        datamodule=ImageNet(
-            train_batch_size=256,
-            val_batch_size=256,
-            num_workers=16,
-        ),
-        model=Model(
-            learning_rate=1e-3,
-            max_epochs=3,
-        ),
+
+    model = Model.load_from_checkpoint(
+        "lightning_logs/version_6/checkpoints/epoch=29-step=450.ckpt"
     )
+    model.eval()
+    model.cuda()
+
+    for images, file_names in tqdm(dataloader):
+        images = images.to("cuda", non_blocking=True)
+
+        with torch.no_grad():
+            x = model.resnet(images)
+            x = model.reduce(x)
+            x = x.cpu()
+
+        for feature, file_name in zip(x, file_names):
+            np.save(f"features/{file_name}.npy", feature.numpy())
 
 
 if __name__ == "__main__":
